@@ -1,0 +1,13 @@
+{
+  "name": "sjek-platform-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SJek On-Demand Multi-Portal Web App: SFood, SSend, Tariffs & 3-Party Financial Ledger",
+  "scripts": {
+    "start": "npx serve -s . -l 3000"
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.0",
+    "leaflet": "^1.9.4"
+  }
+}

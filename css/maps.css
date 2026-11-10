@@ -1,0 +1,4 @@
+.map-panel { height: 340px; min-height: 250px; width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid var(--sjek-border); background: #eaf0e8; }
+.map-help { margin: 8px 0 12px; color: var(--sjek-text-muted); font-size: 13px; }
+.leaflet-container { font-family: var(--sjek-font); }
+@media (max-width: 600px) { .map-panel { height: 280px; } }

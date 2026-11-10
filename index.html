@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#2fa79e" />
+  <meta name="description" content="Pesan ojek online, makanan, dan kirim paket bersama SJek." />
+  <title>SJek | Ojek Online, SFood &amp; SSend</title>
+  <link rel="icon" href="assets/img/sjek-mark.png" type="image/png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/maps.css" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+</head>
+<body>
+  <header class="sjek-header">
+    <div class="header-container">
+      <a class="brand-area" href="#/" aria-label="SJek beranda">
+        <img src="assets/img/sjek-mark.png" alt="" width="34" height="34" />
+        <span class="brand-text">S<span>Jek</span></span>
+      </a>
+      <nav id="portal-links" class="portal-links" aria-label="Portal akun"></nav>
+      <div class="header-actions">
+        <span id="account-label" class="account-label"></span>
+        <button id="permissions-button" class="btn btn-ghost" type="button">Izin perangkat</button>
+        <a id="signin-link" class="btn btn-primary" href="#/auth">Masuk / Daftar</a>
+        <button id="signout-button" class="btn btn-ghost hidden" type="button">Keluar</button>
+      </div>
+    </div>
+  </header>
+  <main id="app-viewport" tabindex="-1"></main>
+  <div id="modal-container" class="modal-overlay hidden" role="dialog" aria-modal="true"></div>
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

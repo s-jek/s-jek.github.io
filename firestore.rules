@@ -1,0 +1,639 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.matches('.*@gmail\\.com$')
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function isAdmin() {
+      return signedIn() && (request.auth.token.admin == true || request.auth.token.superAdmin == true);
+    }
+
+    function ownsMerchant(merchantId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/merchants/$(merchantId))
+        && get(/databases/$(database)/documents/merchants/$(merchantId)).data.ownerUid == request.auth.uid;
+    }
+
+    function ownsOrder(orderId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/orders/$(orderId))
+        && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid;
+    }
+
+    function isApprovedPartner(partnerType) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && partnerType in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.partnerRoles;
+    }
+
+    function isCompressedCloudinaryImage(url) {
+      return url is string
+        && url.matches('^https://res[.]cloudinary[.]com/ks6vgjfn/image/upload/.+[.]webp$');
+    }
+
+    function validCoinCheckInUpdate() {
+      let settings = get(/databases/$(database)/documents/coinSettings/global).data;
+      let lastCheckIn = resource.data.get('lastCoinCheckInAt', null);
+      let hoursSince = lastCheckIn == null ? duration.value(0, 'h') : request.time - lastCheckIn;
+      let previousStreak = resource.data.get('coinCheckInStreak', 0);
+      let nextDay = lastCheckIn == null || hoursSince > duration.value(48, 'h')
+        ? 1
+        : (previousStreak >= 7 ? 1 : previousStreak + 1);
+      return settings.dailyRewards is list
+        && settings.dailyRewards.size() == 7
+        && settings.dailyRewards[nextDay - 1] is int
+        && hoursSince >= duration.value(24, 'h')
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['coins', 'coinCheckInStreak', 'lastCoinCheckInAt'])
+        && request.resource.data.lastCoinCheckInAt == request.time
+        && request.resource.data.coinCheckInStreak == nextDay
+        && request.resource.data.coins
+          == resource.data.get('coins', 0) + settings.dailyRewards[nextDay - 1];
+    }
+
+    function validCoinRedemptionUpdate(uid) {
+      let redemptionId = request.resource.data.get('lastCoinRedemptionId', '');
+      let redemptionPath = /databases/$(database)/documents/coinRedemptions/$(redemptionId);
+      return redemptionId is string
+        && redemptionId.size() > 0
+        && existsAfter(redemptionPath)
+        && getAfter(redemptionPath).data.uid == uid
+        && getAfter(redemptionPath).data.status == 'PENDING'
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['coins', 'lastCoinRedemptionId'])
+        && request.resource.data.coins
+          == resource.data.get('coins', 0) - getAfter(redemptionPath).data.coinCost
+        && request.resource.data.coins >= 0;
+    }
+
+    function validCoinRedemptionCreate(redemptionId) {
+      let data = request.resource.data;
+      let rewardPath = /databases/$(database)/documents/coinRewards/$(data.rewardId);
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let reward = get(rewardPath).data;
+      let updatedUser = getAfter(userPath).data;
+      return data.keys().hasAll([
+          'uid', 'rewardId', 'rewardName', 'rewardType', 'coinCost', 'cashAmount',
+          'voucherCode', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'rewardId', 'rewardName', 'rewardType', 'coinCost', 'cashAmount',
+          'voucherCode', 'status', 'createdAt', 'payoutProvider', 'payoutAccount'
+        ])
+        && exists(rewardPath)
+        && data.uid == request.auth.uid
+        && data.rewardName == reward.name
+        && data.rewardType == reward.type
+        && data.coinCost == reward.coinCost
+        && data.status == 'PENDING'
+        && data.createdAt == request.time
+        && reward.isActive == true
+        && updatedUser.coins == get(userPath).data.get('coins', 0) - reward.coinCost
+        && updatedUser.coins >= 0
+        && updatedUser.lastCoinRedemptionId == redemptionId
+        && (
+          (reward.type == 'cash'
+            && data.cashAmount == reward.cashAmount
+            && data.voucherCode == ''
+            && data.keys().hasAll(['payoutProvider', 'payoutAccount'])
+            && data.payoutProvider is string
+            && data.payoutProvider.size() > 0
+            && data.payoutProvider.size() <= 80
+            && data.payoutAccount is string
+            && data.payoutAccount.size() > 0
+            && data.payoutAccount.size() <= 40)
+          || (reward.type == 'voucher'
+            && data.cashAmount == 0
+            && data.voucherCode == reward.voucherCode
+            && !('payoutProvider' in data)
+            && !('payoutAccount' in data))
+        );
+    }
+
+    function validPartnerApplication() {
+      let data = request.resource.data;
+      let commonKeys = [
+        'applicantUid', 'email', 'phone', 'partnerType', 'legalName', 'nik',
+        'payoutProvider', 'payoutAccount', 'agreementVersion', 'agreementAccepted',
+        'status', 'agreementAcceptedAt', 'submittedAt'
+      ];
+      return data.keys().hasAll(commonKeys)
+        && data.applicantUid == request.auth.uid
+        && data.email == request.auth.token.email
+        && data.phone == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone
+        && data.legalName is string
+        && data.legalName.size() > 0
+        && data.nik is string
+        && data.nik.matches('^[0-9]{16}$')
+        && data.payoutProvider is string
+        && data.payoutProvider.size() > 0
+        && data.payoutAccount is string
+        && data.payoutAccount.size() > 0
+        && data.status == 'PENDING'
+        && data.agreementAccepted == true
+        && data.agreementVersion == '1.1'
+        && data.agreementAcceptedAt is string
+        && data.submittedAt is string
+        && (
+          (data.partnerType == 'driver'
+            && data.keys().hasOnly(commonKeys.concat([
+              'address', 'emergencyContact', 'licenseNumber', 'vehiclePlate', 'vehicleType',
+              'vehiclePhotoUrl', 'vehiclePhotoPublicId'
+            ]))
+            && data.address is string
+            && data.address.size() > 0
+            && data.emergencyContact is string
+            && data.licenseNumber is string
+            && data.vehiclePlate is string
+            && data.vehiclePlate.size() > 0
+            && data.vehicleType is string
+            && data.vehicleType.size() > 0
+            && isCompressedCloudinaryImage(data.vehiclePhotoUrl)
+            && data.vehiclePhotoPublicId is string
+            && data.vehiclePhotoPublicId.size() > 0)
+          || (data.partnerType == 'merchant'
+            && data.keys().hasOnly(commonKeys.concat([
+              'businessName', 'businessAddress', 'businessCategory', 'businessLat', 'businessLng',
+              'businessLicense', 'openingHours', 'storefrontPhotoUrl', 'storefrontPhotoPublicId'
+            ]))
+            && data.businessName is string
+            && data.businessName.size() > 0
+            && data.businessAddress is string
+            && data.businessAddress.size() > 0
+            && data.businessCategory is string
+            && data.businessCategory.size() > 0
+            && data.businessLat is number
+            && data.businessLat >= -90
+            && data.businessLat <= 90
+            && data.businessLng is number
+            && data.businessLng >= -180
+            && data.businessLng <= 180
+            && data.businessLicense is string
+            && data.openingHours is string
+            && data.openingHours.size() > 0
+            && isCompressedCloudinaryImage(data.storefrontPhotoUrl)
+            && data.storefrontPhotoPublicId is string
+            && data.storefrontPhotoPublicId.size() > 0)
+        );
+    }
+
+    function canCreateApprovedMerchant(merchantId) {
+      let application = getAfter(/databases/$(database)/documents/partnerApplications/$(merchantId + '_merchant'));
+      return isAdmin()
+        && merchantId == application.data.applicantUid
+        && application.data.partnerType == 'merchant'
+        && application.data.status == 'APPROVED'
+        && request.resource.data.ownerUid == application.data.applicantUid
+        && request.resource.data.name == application.data.businessName
+        && request.resource.data.address == application.data.businessAddress
+        && request.resource.data.lat == application.data.businessLat
+        && request.resource.data.lng == application.data.businessLng
+        && request.resource.data.openingHours == application.data.openingHours
+        && request.resource.data.bannerUrl == '';
+    }
+
+    function customerCancelsOrder() {
+      return signedIn()
+        && resource.data.customerId == request.auth.uid
+        && resource.data.orderStatus == 'PENDING'
+        && request.resource.data.orderStatus == 'CANCELLED'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orderStatus', 'updatedAt']);
+    }
+
+    function driverAcceptsOrder() {
+      return isApprovedPartner('driver')
+        && request.resource.data.orderStatus == 'ACCEPTED'
+        && resource.data.orderStatus in ['PENDING', 'ACCEPTED']
+        && resource.data.driverId in ['', request.auth.uid]
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orderStatus', 'driverId', 'updatedAt']);
+    }
+
+    function driverUpdatesAssignedOrder() {
+      return isApprovedPartner('driver')
+        && resource.data.driverId == request.auth.uid
+        && request.resource.data.driverId == request.auth.uid
+        && (
+          (resource.data.orderStatus == 'ACCEPTED' && request.resource.data.orderStatus == 'PROCESSING')
+          || (resource.data.orderStatus == 'PROCESSING' && request.resource.data.orderStatus == 'ON_THE_WAY')
+          || (resource.data.orderStatus == 'ON_THE_WAY' && request.resource.data.orderStatus == 'COMPLETED')
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orderStatus', 'updatedAt']);
+    }
+
+    function merchantUpdatesOrder() {
+      return resource.data.merchantId is string
+        && resource.data.merchantId != ''
+        && ownsMerchant(resource.data.merchantId)
+        && (
+          (resource.data.orderStatus == 'PENDING' && request.resource.data.orderStatus == 'ACCEPTED')
+          || (resource.data.orderStatus == 'ACCEPTED' && request.resource.data.orderStatus == 'PROCESSING')
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['orderStatus', 'updatedAt']);
+    }
+
+    function merchantAcceptsAssignedOrder() {
+      return resource.data.merchantId is string
+        && resource.data.merchantId != ''
+        && ownsMerchant(resource.data.merchantId)
+        && resource.data.driverId is string
+        && resource.data.driverId != ''
+        && resource.data.orderStatus in ['ACCEPTED', 'PROCESSING', 'ON_THE_WAY']
+        && resource.data.get('merchantStatus', '') != 'ACCEPTED'
+        && request.resource.data.merchantStatus == 'ACCEPTED'
+        && request.resource.data.merchantAcceptedAt is string
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['merchantStatus', 'merchantAcceptedAt', 'updatedAt']);
+    }
+
+    function driverUpdatesLocation() {
+      return isApprovedPartner('driver')
+        && resource.data.driverId == request.auth.uid
+        && resource.data.orderStatus in ['ACCEPTED', 'PROCESSING', 'ON_THE_WAY']
+        && request.resource.data.driverLocation is map
+        && request.resource.data.driverLocation.keys().hasOnly(['lat', 'lng'])
+        && request.resource.data.driverLocation.lat is number
+        && request.resource.data.driverLocation.lat >= -90
+        && request.resource.data.driverLocation.lat <= 90
+        && request.resource.data.driverLocation.lng is number
+        && request.resource.data.driverLocation.lng >= -180
+        && request.resource.data.driverLocation.lng <= 180
+        && request.resource.data.driverLocationUpdatedAt is string
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['driverLocation', 'driverLocationUpdatedAt']);
+    }
+
+    function validReviewCreate(orderId, targetType) {
+      let orderPath = /databases/$(database)/documents/orders/$(orderId);
+      let order = get(orderPath).data;
+      let data = request.resource.data;
+      let expectedTargetUid = targetType == 'driver' ? order.driverId : order.merchantId;
+      return exists(orderPath)
+        && signedIn()
+        && order.customerId == request.auth.uid
+        && order.orderStatus == 'COMPLETED'
+        && targetType in ['driver', 'merchant']
+        && expectedTargetUid is string
+        && expectedTargetUid != ''
+        && (targetType != 'merchant'
+          || (order.merchantId is string
+            && order.merchantId != ''
+            && exists(/databases/$(database)/documents/merchants/$(order.merchantId))))
+        && (targetType != 'driver'
+          || exists(/databases/$(database)/documents/users/$(order.driverId))
+            && 'driver' in get(/databases/$(database)/documents/users/$(order.driverId)).data.partnerRoles)
+        && data.keys().hasOnly([
+          'targetType', 'targetUid', 'stars',
+          'comment', 'imageUrl', 'status', 'createdAt'
+        ])
+        && data.targetType == targetType
+        && data.targetUid == expectedTargetUid
+        && data.stars is int
+        && data.stars >= 1
+        && data.stars <= 5
+        && data.comment is string
+        && data.comment.size() <= 500
+        && data.imageUrl is string
+        && (data.imageUrl == '' || isCompressedCloudinaryImage(data.imageUrl))
+        && data.status == 'VISIBLE'
+        && data.createdAt is string;
+    }
+
+    function createsOjekRequest(orderId) {
+      return signedIn()
+        && request.resource.data.keys().hasAll([
+          'id', 'serviceType', 'customerId', 'merchantId', 'driverId', 'orderStatus',
+          'pickup', 'dropoff', 'passenger', 'items', 'pricingBreakdown', 'payment',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'serviceType', 'customerId', 'merchantId', 'driverId', 'orderStatus',
+          'pickup', 'dropoff', 'passenger', 'items', 'pricingBreakdown', 'payment',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.id == orderId
+        && request.resource.data.serviceType == 'OJEK'
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.merchantId == ''
+        && request.resource.data.driverId == ''
+        && request.resource.data.orderStatus == 'PENDING'
+        && request.resource.data.pickup is map
+        && request.resource.data.pickup.keys().hasOnly(['lat', 'lng', 'address', 'contactName', 'phone'])
+        && request.resource.data.pickup.lat is number
+        && request.resource.data.pickup.lat >= -90
+        && request.resource.data.pickup.lat <= 90
+        && request.resource.data.pickup.lng is number
+        && request.resource.data.pickup.lng >= -180
+        && request.resource.data.pickup.lng <= 180
+        && request.resource.data.pickup.address is string
+        && request.resource.data.dropoff is map
+        && request.resource.data.dropoff.keys().hasOnly(['lat', 'lng', 'address', 'contactName', 'phone'])
+        && request.resource.data.dropoff.lat is number
+        && request.resource.data.dropoff.lat >= -90
+        && request.resource.data.dropoff.lat <= 90
+        && request.resource.data.dropoff.lng is number
+        && request.resource.data.dropoff.lng >= -180
+        && request.resource.data.dropoff.lng <= 180
+        && request.resource.data.dropoff.address is string
+        && request.resource.data.passenger is map
+        && request.resource.data.passenger.keys().hasOnly(['name', 'phone', 'count'])
+        && request.resource.data.passenger.name is string
+        && request.resource.data.passenger.phone is string
+        && request.resource.data.passenger.count == 1
+        && request.resource.data.items == []
+        && request.resource.data.pricingBreakdown is map
+        && request.resource.data.pricingBreakdown.keys().hasOnly([
+          'distanceKm', 'deliveryFare', 'platformFee', 'voucherDiscount', 'totalCustomerPay', 'isEstimate'
+        ])
+        && request.resource.data.pricingBreakdown.isEstimate == true
+        && request.resource.data.pricingBreakdown.distanceKm is number
+        && request.resource.data.pricingBreakdown.distanceKm > 0
+        && request.resource.data.pricingBreakdown.deliveryFare is number
+        && request.resource.data.pricingBreakdown.deliveryFare >= 0
+        && request.resource.data.pricingBreakdown.platformFee is number
+        && request.resource.data.pricingBreakdown.platformFee >= 0
+        && request.resource.data.pricingBreakdown.voucherDiscount == 0
+        && request.resource.data.pricingBreakdown.totalCustomerPay
+          == request.resource.data.pricingBreakdown.deliveryFare + request.resource.data.pricingBreakdown.platformFee
+        && request.resource.data.payment is map
+        && request.resource.data.payment.keys().hasOnly(['method', 'status'])
+        && request.resource.data.payment.method == 'COD'
+        && request.resource.data.payment.status == 'UNPAID'
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt == request.resource.data.createdAt;
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'customer'
+        && request.resource.data.partnerRoles == []
+        && request.resource.data.phoneVerified == false
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('^\\+[1-9][0-9]{7,14}$')
+        && request.resource.data.coins == 0
+        && request.resource.data.coinCheckInStreak == 0
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'phone', 'phoneVerified', 'role', 'partnerRoles',
+          'coins', 'coinCheckInStreak', 'createdAt', 'updatedAt'
+        ]);
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == uid && validCoinCheckInUpdate())
+        || (signedIn() && request.auth.uid == uid && validCoinRedemptionUpdate(uid))
+        || (signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone', 'phoneVerified', 'updatedAt'])
+          && request.resource.data.phone is string
+          && request.resource.data.phone.matches('^\\+[1-9][0-9]{7,14}$')
+          && request.resource.data.phoneVerified == false);
+      allow delete: if false;
+
+      match /pushTokens/{deviceId} {
+        allow get, list: if signedIn() && (request.auth.uid == uid || isAdmin());
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+          && request.resource.data.token is string
+          && request.resource.data.token.size() >= 20
+          && request.resource.data.token.size() <= 4096
+          && request.resource.data.updatedAt is string;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    match /partnerApplications/{applicationId} {
+      allow get: if isAdmin()
+        || (signedIn()
+          && (applicationId == request.auth.uid + '_driver'
+            || applicationId == request.auth.uid + '_merchant'));
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && validPartnerApplication()
+        && applicationId == request.auth.uid + '_' + request.resource.data.partnerType;
+      allow update: if (isAdmin()
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status in ['APPROVED', 'REJECTED']
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewedBy']))
+        || (signedIn()
+          && resource.data.applicantUid == request.auth.uid
+          && resource.data.status == 'REJECTED'
+          && request.resource.data.status == 'PENDING'
+          && validPartnerApplication()
+          && applicationId == request.auth.uid + '_' + request.resource.data.partnerType)
+        || (signedIn()
+          && resource.data.applicantUid == request.auth.uid
+          && resource.data.status == 'PENDING'
+          && resource.data.agreementVersion == '1.0'
+          && validPartnerApplication()
+          && applicationId == request.auth.uid + '_' + request.resource.data.partnerType);
+      allow delete: if isAdmin();
+    }
+
+    match /tariffs/{tariffId} {
+      allow read: if true;
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /vouchers/{voucherCode} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /coinSettings/{settingsId} {
+      allow get, list: if signedIn();
+      allow create, update: if isAdmin()
+        && settingsId == 'global'
+        && request.resource.data.keys().hasOnly(['dailyRewards', 'updatedAt'])
+        && request.resource.data.dailyRewards is list
+        && request.resource.data.dailyRewards.size() == 7
+        && request.resource.data.dailyRewards[0] is int
+        && request.resource.data.dailyRewards[0] >= 0
+        && request.resource.data.dailyRewards[1] is int
+        && request.resource.data.dailyRewards[1] >= 0
+        && request.resource.data.dailyRewards[2] is int
+        && request.resource.data.dailyRewards[2] >= 0
+        && request.resource.data.dailyRewards[3] is int
+        && request.resource.data.dailyRewards[3] >= 0
+        && request.resource.data.dailyRewards[4] is int
+        && request.resource.data.dailyRewards[4] >= 0
+        && request.resource.data.dailyRewards[5] is int
+        && request.resource.data.dailyRewards[5] >= 0
+        && request.resource.data.dailyRewards[6] is int
+        && request.resource.data.dailyRewards[6] >= 0;
+      allow delete: if false;
+    }
+
+    match /coinRewards/{rewardId} {
+      allow get, list: if signedIn();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          'name', 'description', 'type', 'coinCost', 'cashAmount', 'voucherCode', 'isActive'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 180
+        && request.resource.data.type in ['cash', 'voucher']
+        && request.resource.data.coinCost is int
+        && request.resource.data.coinCost > 0
+        && request.resource.data.cashAmount is int
+        && request.resource.data.cashAmount >= 0
+        && request.resource.data.voucherCode is string
+        && request.resource.data.isActive is bool
+        && ((request.resource.data.type == 'cash' && request.resource.data.cashAmount > 0)
+          || (request.resource.data.type == 'voucher' && request.resource.data.voucherCode.size() > 0));
+      allow delete: if isAdmin();
+    }
+
+    match /coinRedemptions/{redemptionId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn() && validCoinRedemptionCreate(redemptionId);
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'reviewedBy', 'reviewedAt'])
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.reviewedAt is string
+        && (
+          (resource.data.status == 'PENDING' && request.resource.data.status in ['APPROVED', 'REJECTED'])
+          || (resource.data.status == 'APPROVED'
+            && resource.data.rewardType == 'cash'
+            && request.resource.data.status == 'PAID')
+        );
+      allow delete: if false;
+    }
+
+    match /banners/{bannerId} {
+      allow get, list: if isAdmin() || resource.data.isActive == true;
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly([
+          'title', 'subtitle', 'imageUrl', 'ctaLabel', 'ctaPath', 'isActive', 'order', 'updatedAt'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.subtitle is string
+        && request.resource.data.subtitle.size() <= 180
+        && isCompressedCloudinaryImage(request.resource.data.imageUrl)
+        && request.resource.data.ctaLabel is string
+        && request.resource.data.ctaLabel.size() > 0
+        && request.resource.data.ctaLabel.size() <= 28
+        && request.resource.data.ctaPath in ['/customer/ojek', '/customer/sfood', '/customer/ssend']
+        && request.resource.data.isActive is bool
+        && request.resource.data.order is int
+        && request.resource.data.updatedAt is string;
+      allow delete: if isAdmin();
+    }
+
+    match /businessRuleChanges/{changeId} {
+      allow get, list: if isAdmin() || (isApprovedPartner('driver') || isApprovedPartner('merchant'))
+        && resource.data.audience == 'approved-partners';
+      allow create: if isAdmin()
+        && request.resource.data.audience == 'approved-partners'
+        && request.resource.data.title is string
+        && request.resource.data.details is string;
+      allow update, delete: if false;
+    }
+
+    match /merchants/{merchantId} {
+      allow read: if true;
+      allow create: if canCreateApprovedMerchant(merchantId);
+      allow update: if isAdmin()
+        || (ownsMerchant(merchantId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['isOpen', 'name', 'address', 'lat', 'lng', 'category', 'openingHours', 'updatedAt']));
+      allow delete: if isAdmin();
+
+      match /menu/{menuId} {
+        allow read: if true;
+        allow create, update: if (isAdmin() || ownsMerchant(merchantId))
+          && request.resource.data.keys().hasOnly(['id', 'name', 'price', 'description', 'isAvailable', 'category', 'variants', 'imageUrl', 'publicId', 'createdAt', 'updatedAt'])
+          && 'imageUrl' in request.resource.data
+          && isCompressedCloudinaryImage(request.resource.data.imageUrl)
+          && request.resource.data.price is number
+          && request.resource.data.price >= 0;
+        allow delete: if isAdmin() || ownsMerchant(merchantId);
+      }
+    }
+
+    match /orders/{orderId} {
+      allow get, list: if isAdmin()
+        || (signedIn()
+          && (resource.data.customerId == request.auth.uid
+            || resource.data.driverId == request.auth.uid
+            || (resource.data.driverId == '' && resource.data.orderStatus in ['PENDING', 'ACCEPTED'] && isApprovedPartner('driver'))
+            || (resource.data.merchantId != ''
+              && resource.data.driverId != ''
+              && ownsMerchant(resource.data.merchantId))));
+      allow create: if createsOjekRequest(orderId);
+      allow delete: if false;
+      allow update: if isAdmin() || customerCancelsOrder() || driverAcceptsOrder()
+        || driverUpdatesAssignedOrder() || merchantUpdatesOrder()
+        || merchantAcceptsAssignedOrder() || driverUpdatesLocation();
+
+      match /reviews/{targetType} {
+        allow get, list: if resource.data.status == 'VISIBLE' || isAdmin() || ownsOrder(orderId);
+        allow create: if validReviewCreate(orderId, targetType);
+        allow update: if isAdmin()
+          && resource.data.status == 'VISIBLE'
+          && request.resource.data.status == 'HIDDEN'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+        allow delete: if false;
+      }
+    }
+
+    match /reviewAppeals/{appealId} {
+      function appealReviewPath() {
+        return /databases/$(database)/documents/orders/$(request.resource.data.orderId)/reviews/$(request.resource.data.targetType);
+      }
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'orderId', 'targetType', 'customerId', 'details', 'evidenceUrl', 'status', 'createdAt'
+        ])
+        && request.resource.data.orderId is string
+        && request.resource.data.targetType in ['driver', 'merchant']
+        && appealId == request.resource.data.orderId + '_' + request.resource.data.targetType
+        && request.resource.data.customerId == request.auth.uid
+        && exists(appealReviewPath())
+        && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerId == request.auth.uid
+        && get(appealReviewPath()).data.stars in [1, 2]
+        && request.resource.data.details is string
+        && request.resource.data.details.size() > 0
+        && request.resource.data.details.size() <= 1000
+        && isCompressedCloudinaryImage(request.resource.data.evidenceUrl)
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.createdAt is string;
+      allow update: if isAdmin()
+        && resource.data.status == 'PENDING'
+        && request.resource.data.status in ['UPHELD', 'REJECTED']
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'decisionDetails', 'reviewedBy', 'reviewedAt'])
+        && request.resource.data.decisionDetails is string
+        && request.resource.data.decisionDetails.size() <= 500
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.reviewedAt is string;
+      allow delete: if false;
+    }
+
+    match /notificationEvents/{eventId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
