@@ -33,8 +33,15 @@ export async function render(container, { user }) {
   const refreshQuote = async () => {
     if (!pickup || !dropoff) return;
     const request = ++routeRequest;
+    quote = null;
     try {
-      const route = await mapService.calculateRealRoute(pickup.lat, pickup.lng, dropoff.lat, dropoff.lng);
+      const route = await mapService.calculateRealRoute(
+        pickup.lat,
+        pickup.lng,
+        dropoff.lat,
+        dropoff.lng,
+        () => request === routeRequest
+      );
       if (request !== routeRequest) return;
       const tariffs = await OrderService.getTariffs();
       const deliveryFare = PricingService.calculateDeliveryFare("SSEND", route.distanceKm, tariffs);
@@ -44,6 +51,7 @@ export async function render(container, { user }) {
       quote = { distanceKm: route.distanceKm, deliveryFare, discount: discount.discountAmount, voucherCode: discount.isValid ? code : "", platformFee: tariffs.platformFee };
       summary.innerHTML = `<div class="split"><span>Jarak perjalanan</span><strong>${route.distanceKm} km · ±${route.durationMinutes} menit</strong></div><div class="split"><span>Ongkir</span><strong>${money(deliveryFare)}</strong></div><div class="split"><span>Biaya layanan</span><span>${money(tariffs.platformFee)}</span></div><div class="split"><span>Diskon ${discount.isValid ? `(${escapeHTML(code)})` : ""}</span><span>− ${money(discount.discountAmount)}</span></div>${code && !discount.isValid ? `<small>${escapeHTML(discount.reason)}</small>` : ""}<div class="split"><strong>Total</strong><strong class="price">${money(deliveryFare + tariffs.platformFee - discount.discountAmount)}</strong></div>`;
     } catch (error) {
+      if (request !== routeRequest) return;
       console.error("Rute pengiriman gagal dihitung.", error);
       summary.textContent = "Rute tidak dapat dihitung. Periksa titik jemput dan antar, lalu coba lagi.";
       showToast("Rute tidak dapat dihitung. Silakan coba lagi.", "error");

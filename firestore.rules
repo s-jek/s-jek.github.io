@@ -471,6 +471,7 @@ service cloud.firestore {
       allow get, list: if isAdmin()
         || (signedIn() && resource.data.driverUid == request.auth.uid);
       allow create: if signedIn()
+          && isApprovedPartner('driver')
           && request.resource.data.keys().hasOnly([
             'driverUid', 'amount', 'driverCommission', 'merchantCommission', 'platformFee',
             'status', 'createdAt'
@@ -680,6 +681,11 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
         allow delete: if false;
       }
+    }
+
+    match /{path=**}/reviews/{reviewId} {
+      allow get, list: if isAdmin() || resource.data.status == 'VISIBLE';
+      allow create, update, delete: if false;
     }
 
     match /reviewAppeals/{appealId} {

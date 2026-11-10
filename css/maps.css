@@ -23,3 +23,19 @@
 .driver-map-marker-suspended {
   background: #d93025;
 }
+
+.driver-order-map {
+  height: 240px;
+  min-height: 200px;
+}
+
+.driver-order-route {
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 600px) {
+  .driver-order-map {
+    height: 220px;
+  }
+}

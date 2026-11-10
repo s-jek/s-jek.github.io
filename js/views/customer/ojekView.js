@@ -165,6 +165,14 @@ export async function render(container, { user }) {
         if (destroyed || request !== quoteRequest) return;
         pickupDistanceKm = pickupRoute.distanceKm;
       }
+      if (!nearestDriver && tariffs.pickupSurchargePerKm > 0) {
+        quote = null;
+        total.textContent = "Menunggu driver aktif";
+        container.querySelector("#ojek-summary small").textContent =
+          "Biaya jemput tidak dapat dipastikan sebelum ada driver aktif di sekitar. Coba lagi saat driver tersedia.";
+        updateSubmitButton();
+        return;
+      }
       const pickupSurcharge = PricingService.calculatePickupSurcharge(pickupDistanceKm, tariffs);
       quote = {
         distanceKm: route.distanceKm,

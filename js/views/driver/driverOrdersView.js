@@ -3,6 +3,10 @@ import { OrderService } from "../../services/orderService.js";
 import { NotificationService } from "../../services/notificationService.js";
 import { ReviewService } from "../../services/reviewService.js";
 import { FinanceService } from "../../services/financeService.js";
+import { MapService } from "../../services/mapService.js";
+
+const validPoint = point => Number.isFinite(point?.lat) && Math.abs(point.lat) <= 90
+  && Number.isFinite(point?.lng) && Math.abs(point.lng) <= 180;
 
 export async function render(container, { user, orders: currentOrders } = {}) {
   const driverId = user.uid;
@@ -21,6 +25,7 @@ export async function render(container, { user, orders: currentOrders } = {}) {
   let unsubscribeOrders = null;
   let mounted = true;
   const locationWatches = new Map();
+  const orderMaps = [];
   let presenceWatch = null;
   let presenceTimer = null;
   let lastPresence = null;
@@ -51,6 +56,7 @@ export async function render(container, { user, orders: currentOrders } = {}) {
       const target = ["PENDING", "ACCEPTED"].includes(order.orderStatus) && !order.driverId ? Date.now() + 30000 : 0;
       return `<article class="card order-card" data-order="${escapeHTML(order.id)}" ${target ? `data-deadline="${target}"` : ""}><div class="split"><div><strong>${escapeHTML(order.id)}</strong><p class="muted">${order.serviceType === "OJEK" ? "Ojek Online" : order.serviceType === "SFOOD" ? "SFood" : "SSend"} · ${order.pricingBreakdown?.distanceKm || 0} km</p></div><span class="badge ${order.orderStatus === "PENDING" ? "badge-warning" : "badge-success"}">${escapeHTML(order.orderStatus)}</span></div>
         <div class="grid grid-2"><div><small class="muted">Jemput</small><p>${escapeHTML(order.pickup?.address || "Lokasi jemput")}</p></div><div><small class="muted">Antar</small><p>${escapeHTML(order.dropoff?.address || "Lokasi antar")}</p></div></div>
+        ${validPoint(order.pickup) && validPoint(order.dropoff) ? `<div class="driver-order-route"><div class="map-panel driver-order-map" data-driver-map="${escapeHTML(order.id)}" aria-label="Peta lokasi jemput dan tujuan"></div><div class="row"><a class="btn btn-secondary" href="https://www.google.com/maps/dir/?api=1&amp;destination=${order.pickup.lat},${order.pickup.lng}" target="_blank" rel="noopener noreferrer">Navigasi ke jemput</a><a class="btn btn-ghost" href="https://www.google.com/maps/dir/?api=1&amp;destination=${order.dropoff.lat},${order.dropoff.lng}" target="_blank" rel="noopener noreferrer">Navigasi ke tujuan</a></div></div>` : `<p class="muted">Koordinat peta untuk lokasi jemput/antar belum tersedia.</p>`}
         ${order.serviceType === "OJEK" ? `<div><small class="muted">Penumpang</small><p>${escapeHTML(order.passenger?.name || order.pickup?.contactName || "")} · ${escapeHTML(order.passenger?.phone || order.pickup?.phone || "")}</p></div>` : ""}
         <div class="split"><span>${order.serviceType === "OJEK" ? "Estimasi tarif tunai" : "Pendapatan bersih driver"}</span><strong class="price">${money(order.serviceType === "OJEK" ? order.pricingBreakdown?.totalCustomerPay : order.financialLedger?.driverNet)}</strong></div>
         ${order.orderStatus === "PENDING" ? `<strong class="countdown">Order masuk · <span data-countdown>${Math.max(0, Math.ceil((target - Date.now()) / 1000))}</span> detik</strong>` : ""}
@@ -59,6 +65,21 @@ export async function render(container, { user, orders: currentOrders } = {}) {
           ? `<button class="btn btn-secondary" data-location-order="${escapeHTML(order.id)}">${locationWatches.has(order.id) ? "Hentikan berbagi lokasi" : "Bagikan lokasi perjalanan"}</button>` : ""}
       </article>`;
     }).join("") : `<div class="empty-state">Tidak ada order masuk saat ini.</div>`}</section>`;
+  for (const mapElement of container.querySelectorAll("[data-driver-map]")) {
+    const order = available.find(item => item.id === mapElement.dataset.driverMap);
+    if (!order) continue;
+    try {
+      const map = new MapService(mapElement, [order.pickup.lat, order.pickup.lng], 13);
+      orderMaps.push(map);
+      map.setPickupLocation(order.pickup.lat, order.pickup.lng, "Titik jemput");
+      map.setDropoffLocation(order.dropoff.lat, order.dropoff.lng, "Tujuan");
+      map.calculateRealRoute(order.pickup.lat, order.pickup.lng, order.dropoff.lat, order.dropoff.lng, () => mounted)
+        .catch(error => console.error(`Rute order ${order.id} gagal dimuat.`, error));
+    } catch (error) {
+      console.error(`Peta order ${order.id} gagal ditampilkan.`, error);
+      mapElement.insertAdjacentHTML("afterend", '<p class="muted">Peta belum dapat dimuat. Gunakan tautan navigasi.</p>');
+    }
+  }
   const refreshTimer = window.setInterval(() => {
     let expired = false;
     container.querySelectorAll("[data-deadline]").forEach(card => {
@@ -74,6 +95,7 @@ export async function render(container, { user, orders: currentOrders } = {}) {
     unsubscribeOrders?.();
     locationWatches.forEach(watchId => navigator.geolocation.clearWatch(watchId));
     locationWatches.clear();
+    orderMaps.forEach(map => map.destroy());
     if (presenceWatch !== null) navigator.geolocation.clearWatch(presenceWatch);
     window.clearInterval(presenceTimer);
     window.clearInterval(refreshTimer);
