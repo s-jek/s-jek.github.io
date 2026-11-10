@@ -15,7 +15,9 @@ service cloud.firestore {
     function ownsMerchant(merchantId) {
       return signedIn()
         && exists(/databases/$(database)/documents/merchants/$(merchantId))
-        && get(/databases/$(database)/documents/merchants/$(merchantId)).data.ownerUid == request.auth.uid;
+        && get(/databases/$(database)/documents/merchants/$(merchantId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+          .get('merchantAccountStatus', 'ACTIVE') == 'ACTIVE';
     }
 
     function ownsOrder(orderId) {
@@ -205,7 +207,10 @@ service cloud.firestore {
     }
 
     function driverAcceptsOrder() {
+      let driverPath = /databases/$(database)/documents/users/$(request.auth.uid);
       return isApprovedPartner('driver')
+        && exists(driverPath)
+        && get(driverPath).data.get('driverAccountStatus', 'ACTIVE') == 'ACTIVE'
         && request.resource.data.orderStatus == 'ACCEPTED'
         && resource.data.orderStatus in ['PENDING', 'ACCEPTED']
         && resource.data.driverId in ['', request.auth.uid]
@@ -347,18 +352,36 @@ service cloud.firestore {
         && request.resource.data.items == []
         && request.resource.data.pricingBreakdown is map
         && request.resource.data.pricingBreakdown.keys().hasOnly([
-          'distanceKm', 'deliveryFare', 'platformFee', 'voucherDiscount', 'totalCustomerPay', 'isEstimate'
+          'distanceKm', 'baseDeliveryFare', 'deliveryFare', 'platformFee', 'driverCommissionPct',
+          'merchantCommissionPct', 'pickupDistanceKm', 'pickupSurcharge',
+          'voucherDiscount', 'totalCustomerPay', 'isEstimate'
         ])
         && request.resource.data.pricingBreakdown.isEstimate == true
         && request.resource.data.pricingBreakdown.distanceKm is number
         && request.resource.data.pricingBreakdown.distanceKm > 0
+        && request.resource.data.pricingBreakdown.baseDeliveryFare is number
+        && request.resource.data.pricingBreakdown.baseDeliveryFare >= 0
         && request.resource.data.pricingBreakdown.deliveryFare is number
         && request.resource.data.pricingBreakdown.deliveryFare >= 0
+        && request.resource.data.pricingBreakdown.deliveryFare
+          == request.resource.data.pricingBreakdown.baseDeliveryFare
+            + request.resource.data.pricingBreakdown.pickupSurcharge
         && request.resource.data.pricingBreakdown.platformFee is number
         && request.resource.data.pricingBreakdown.platformFee >= 0
+        && request.resource.data.pricingBreakdown.driverCommissionPct is number
+        && request.resource.data.pricingBreakdown.driverCommissionPct >= 0
+        && request.resource.data.pricingBreakdown.driverCommissionPct <= 100
+        && request.resource.data.pricingBreakdown.merchantCommissionPct is number
+        && request.resource.data.pricingBreakdown.merchantCommissionPct >= 0
+        && request.resource.data.pricingBreakdown.merchantCommissionPct <= 100
+        && request.resource.data.pricingBreakdown.pickupDistanceKm is number
+        && request.resource.data.pricingBreakdown.pickupDistanceKm >= 0
+        && request.resource.data.pricingBreakdown.pickupSurcharge is number
+        && request.resource.data.pricingBreakdown.pickupSurcharge >= 0
         && request.resource.data.pricingBreakdown.voucherDiscount == 0
         && request.resource.data.pricingBreakdown.totalCustomerPay
-          == request.resource.data.pricingBreakdown.deliveryFare + request.resource.data.pricingBreakdown.platformFee
+          == request.resource.data.pricingBreakdown.deliveryFare
+            + request.resource.data.pricingBreakdown.platformFee
         && request.resource.data.payment is map
         && request.resource.data.payment.keys().hasOnly(['method', 'status'])
         && request.resource.data.payment.method == 'COD'
@@ -406,6 +429,73 @@ service cloud.firestore {
           && request.resource.data.updatedAt is string;
         allow delete: if signedIn() && request.auth.uid == uid;
       }
+    }
+
+    match /driverLocations/{uid} {
+      allow get, list: if signedIn();
+      allow create: if isAdmin()
+          || (signedIn()
+            && request.auth.uid == uid
+            && isApprovedPartner('driver')
+            && get(/databases/$(database)/documents/users/$(uid)).data
+              .get('driverAccountStatus', 'ACTIVE') == 'ACTIVE'
+            && request.resource.data.keys().hasOnly(['lat', 'lng', 'isOnline', 'updatedAt'])
+            && request.resource.data.lat is number
+            && request.resource.data.lat >= -90
+            && request.resource.data.lat <= 90
+            && request.resource.data.lng is number
+            && request.resource.data.lng >= -180
+            && request.resource.data.lng <= 180
+            && request.resource.data.isOnline is bool
+            && request.resource.data.updatedAt is string);
+      allow update: if isAdmin()
+          || (signedIn()
+            && request.auth.uid == uid
+            && isApprovedPartner('driver')
+            && get(/databases/$(database)/documents/users/$(uid)).data
+              .get('driverAccountStatus', 'ACTIVE') == 'ACTIVE'
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['lat', 'lng', 'isOnline', 'updatedAt'])
+            && request.resource.data.lat is number
+            && request.resource.data.lat >= -90
+            && request.resource.data.lat <= 90
+            && request.resource.data.lng is number
+            && request.resource.data.lng >= -180
+            && request.resource.data.lng <= 180
+            && request.resource.data.isOnline is bool
+            && request.resource.data.updatedAt is string);
+        allow delete: if isAdmin();
+    }
+
+    match /driverSettlements/{settlementId} {
+      allow get, list: if isAdmin()
+        || (signedIn() && resource.data.driverUid == request.auth.uid);
+      allow create: if signedIn()
+          && request.resource.data.keys().hasOnly([
+            'driverUid', 'amount', 'driverCommission', 'merchantCommission', 'platformFee',
+            'status', 'createdAt'
+          ])
+          && request.resource.data.driverUid == request.auth.uid
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.driverCommission is number
+          && request.resource.data.driverCommission >= 0
+          && request.resource.data.merchantCommission is number
+          && request.resource.data.merchantCommission >= 0
+          && request.resource.data.platformFee is number
+          && request.resource.data.platformFee >= 0
+          && request.resource.data.amount == request.resource.data.driverCommission
+            + request.resource.data.merchantCommission + request.resource.data.platformFee
+          && request.resource.data.status == 'PENDING'
+          && request.resource.data.createdAt is string;
+      allow update: if isAdmin()
+          && resource.data.status == 'PENDING'
+          && request.resource.data.status in ['APPROVED', 'REJECTED']
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.reviewedAt is string
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'reviewedBy', 'reviewedAt']);
+      allow delete: if false;
     }
 
     match /partnerApplications/{applicationId} {

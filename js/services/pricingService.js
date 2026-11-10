@@ -4,7 +4,11 @@ export const DEFAULT_TARIFFS = Object.freeze({
   sfood: { baseKm: 2, baseFare: 7000, perKm: 2000 },
   platformFee: 1000,
   driverCommissionPct: 15,
-  merchantCommissionPct: 20
+  merchantCommissionPct: 20,
+  pickupSurchargeThresholdKm: 5,
+  pickupSurchargePerKm: 0,
+  driverDeposit: 0,
+  merchantDeposit: 0
 });
 
 export class PricingService {
@@ -17,6 +21,14 @@ export class PricingService {
     const distance = Math.max(0, Number(distanceKm) || 0);
     if (distance <= rules.baseKm) return rules.baseFare;
     return rules.baseFare + Math.ceil(distance - rules.baseKm) * rules.perKm;
+  }
+
+  static calculatePickupSurcharge(distanceKm, tariffRules = DEFAULT_TARIFFS) {
+    const thresholdKm = Math.max(0, Number(tariffRules.pickupSurchargeThresholdKm ?? 5));
+    const ratePerKm = Math.max(0, Number(tariffRules.pickupSurchargePerKm) || 0);
+    const distance = Number(distanceKm);
+    const extraKm = Math.ceil(Math.max(0, (Number.isFinite(distance) ? distance : 0) - thresholdKm));
+    return extraKm * ratePerKm;
   }
 
   static applyVoucher(voucher, subtotal, deliveryFare) {

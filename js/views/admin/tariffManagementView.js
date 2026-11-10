@@ -20,7 +20,13 @@ export async function render(container) {
       <label class="field">Biaya layanan (Rp)<input name="platformFee" type="number" min="0" step="500" value="${tariffs.platformFee}" required></label>
       <label class="field">Komisi driver (%)<input name="driverCommissionPct" type="number" min="0" max="100" step="0.1" value="${tariffs.driverCommissionPct}" required></label>
       <label class="field">Komisi toko (%)<input name="merchantCommissionPct" type="number" min="0" max="100" step="0.1" value="${tariffs.merchantCommissionPct}" required></label>
-    </div><div class="row"><button class="btn btn-primary" type="submit">Simpan tarif</button><span class="muted">Tarif dasar saat ini: Ojek ${money(tariffs.ojek.baseFare)}, SFood ${money(tariffs.sfood.baseFare)}, SSend ${money(tariffs.ssend.baseFare)}.</span></div></form>`;
+    </div><h2>Jemput &amp; deposit mitra</h2><div class="form-grid">
+      <label class="field">Jarak jemput gratis (km)<input name="pickupSurchargeThresholdKm" type="number" min="0" step="0.1" value="${tariffs.pickupSurchargeThresholdKm ?? 5}" required></label>
+      <label class="field">Biaya per km di atas batas (Rp)<input name="pickupSurchargePerKm" type="number" min="0" step="500" value="${tariffs.pickupSurchargePerKm ?? 0}" required></label>
+      <label class="field">Deposit mitra driver (Rp)<input name="driverDeposit" type="number" min="0" step="10000" value="${tariffs.driverDeposit ?? 0}" required></label>
+      <label class="field">Deposit mitra toko (Rp)<input name="merchantDeposit" type="number" min="0" step="10000" value="${tariffs.merchantDeposit ?? 0}" required></label>
+    </div><p class="muted">Biaya jemput dihitung dari jarak driver ke titik jemput, di luar 5 km gratis. Nilai 0 menonaktifkan biaya tersebut. Deposit dapat dikembalikan setelah admin memastikan semua kewajiban lunas.</p>
+    <div class="row"><button class="btn btn-primary" type="submit">Simpan tarif</button><span class="muted">Tarif dasar saat ini: Ojek ${money(tariffs.ojek.baseFare)}, SFood ${money(tariffs.sfood.baseFare)}, SSend ${money(tariffs.ssend.baseFare)}.</span></div></form>`;
   container.querySelector("#tariff-form").addEventListener("submit", async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -31,9 +37,13 @@ export async function render(container) {
       sfood: { baseKm: value("sfoodBaseKm"), baseFare: value("sfoodBaseFare"), perKm: value("sfoodPerKm") },
       platformFee: value("platformFee"),
       driverCommissionPct: value("driverCommissionPct"),
-      merchantCommissionPct: value("merchantCommissionPct")
+      merchantCommissionPct: value("merchantCommissionPct"),
+      pickupSurchargeThresholdKm: value("pickupSurchargeThresholdKm"),
+      pickupSurchargePerKm: value("pickupSurchargePerKm"),
+      driverDeposit: value("driverDeposit"),
+      merchantDeposit: value("merchantDeposit")
     };
-    if (Object.values(updated.ojek).concat(Object.values(updated.ssend), Object.values(updated.sfood), updated.platformFee, updated.driverCommissionPct, updated.merchantCommissionPct).some(number => !Number.isFinite(number) || number < 0)) {
+    if (Object.values(updated.ojek).concat(Object.values(updated.ssend), Object.values(updated.sfood), updated.platformFee, updated.driverCommissionPct, updated.merchantCommissionPct, updated.pickupSurchargeThresholdKm, updated.pickupSurchargePerKm, updated.driverDeposit, updated.merchantDeposit).some(number => !Number.isFinite(number) || number < 0)) {
       return showToast("Nilai tarif harus berupa angka nol atau lebih.", "error");
     }
     if (updated.driverCommissionPct > 100 || updated.merchantCommissionPct > 100) return showToast("Persentase komisi maksimal 100%.", "error");

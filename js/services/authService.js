@@ -38,6 +38,8 @@ function toProfile(firebaseUser, profile = {}, claims = {}) {
     phone: profile.phone || firebaseUser.phoneNumber || "",
     phoneVerified: Boolean(firebaseUser.phoneNumber || profile.phoneVerified),
     role: claims.superAdmin ? "superadmin" : claims.admin ? "admin" : "customer",
+    driverAccountStatus: profile.driverAccountStatus || "ACTIVE",
+    merchantAccountStatus: profile.merchantAccountStatus || "ACTIVE",
     partnerRoles: Array.isArray(profile.partnerRoles) ? profile.partnerRoles : [],
     partnerStatus: profile.partnerStatus || {},
     partnerMerchantId: profile.partnerMerchantId || "",

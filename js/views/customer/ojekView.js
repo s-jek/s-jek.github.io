@@ -1,4 +1,4 @@
-import { escapeHTML, money, navigate, showToast } from "../../app.js";
+import { escapeHTML, money, navigate, registerRouteCleanup, showToast } from "../../app.js";
 import { MapService } from "../../services/mapService.js";
 import { OrderService } from "../../services/orderService.js";
 import { PricingService } from "../../services/pricingService.js";
@@ -89,7 +89,7 @@ export async function render(container, { user }) {
       </section>
       <section class="ojek-map-card" aria-label="Peta perjalanan">
         <div id="ojek-map" class="map-panel" aria-label="Peta titik jemput dan tujuan"></div>
-        <div class="ojek-map-footer"><span class="ojek-map-legend"><i class="ojek-pickup-dot"></i> Jemput <i class="ojek-destination-dot"></i> Tujuan</span><div class="ojek-map-actions"><button class="btn btn-ghost" type="button" data-map-target="pickup">Pilih jemput</button><button class="btn btn-ghost" type="button" data-map-target="dropoff">Pilih tujuan</button></div></div>
+        <div class="ojek-map-footer"><span class="ojek-map-legend"><i class="ojek-pickup-dot"></i> Jemput <i class="ojek-destination-dot"></i> Tujuan <span>🏍 Aktif</span><span>Abu-abu: lokasi terakhir</span><span>Merah: akun nonaktif</span></span><div class="ojek-map-actions"><button class="btn btn-ghost" type="button" data-map-target="pickup">Pilih jemput</button><button class="btn btn-ghost" type="button" data-map-target="dropoff">Pilih tujuan</button></div></div>
         <p class="ojek-map-help" id="map-help" aria-live="polite">Lokasi dan tujuan akan muncul di peta.</p>
       </section>
     </form>`;
@@ -107,12 +107,15 @@ export async function render(container, { user }) {
   const submitButton = container.querySelector(".ojek-submit-button");
   const mapHelp = container.querySelector("#map-help");
   const mapService = new MapService("ojek-map", [3.584, 98.675], 13);
+  let driverLocations = [];
+  let stopDriverLocations = () => {};
   let pickup = null;
   let dropoff = null;
   let quote = null;
   let quoteRequest = 0;
   let activeMapTarget = "pickup";
   const searchTimers = { pickup: 0, dropoff: 0 };
+  let pickupRefreshTimer = 0;
   const searchControllers = { pickup: null, dropoff: null };
   const lookupControllers = { pickup: null, dropoff: null };
   let destroyed = false;
@@ -147,11 +150,36 @@ export async function render(container, { user }) {
       ]);
       if (destroyed || request !== quoteRequest || !route) return;
       const fare = PricingService.calculateDeliveryFare("OJEK", route.distanceKm, tariffs);
-      quote = { distanceKm: route.distanceKm, deliveryFare: fare, platformFee: tariffs.platformFee };
-      total.textContent = money(fare + tariffs.platformFee);
+      const now = Date.now();
+      const activeDrivers = driverLocations.filter(driver => driver.isOnline === true
+        && driver.accountStatus !== "SUSPENDED"
+        && now - Date.parse(driver.updatedAt || "") >= 0
+        && now - Date.parse(driver.updatedAt || "") <= 60_000
+        && Number.isFinite(driver.lat) && Number.isFinite(driver.lng));
+      const nearestDriver = activeDrivers.sort((a, b) =>
+        MapService.calculateHaversineDistance(a.lat, a.lng, pickup.lat, pickup.lng)
+        - MapService.calculateHaversineDistance(b.lat, b.lng, pickup.lat, pickup.lng))[0];
+      let pickupDistanceKm = 0;
+      if (nearestDriver) {
+        const pickupRoute = await MapService.calculateRouteDistance(nearestDriver.lat, nearestDriver.lng, pickup.lat, pickup.lng);
+        if (destroyed || request !== quoteRequest) return;
+        pickupDistanceKm = pickupRoute.distanceKm;
+      }
+      const pickupSurcharge = PricingService.calculatePickupSurcharge(pickupDistanceKm, tariffs);
+      quote = {
+        distanceKm: route.distanceKm,
+        baseDeliveryFare: fare,
+        deliveryFare: fare + pickupSurcharge,
+        platformFee: tariffs.platformFee,
+        driverCommissionPct: tariffs.driverCommissionPct,
+        merchantCommissionPct: tariffs.merchantCommissionPct,
+        pickupDistanceKm,
+        pickupSurcharge
+      };
+      total.textContent = money(fare + tariffs.platformFee + pickupSurcharge);
       total.title = `${route.distanceKm} km · sekitar ${route.durationMinutes} menit`;
       container.querySelector("#ojek-summary small").textContent =
-        `${route.distanceKm} km · ±${route.durationMinutes} menit · ${money(fare)} + biaya layanan ${money(tariffs.platformFee)}. Tarif estimasi; harga akhir dikonfirmasi bersama driver.`;
+        `${route.distanceKm} km · ±${route.durationMinutes} menit · ongkir ${money(fare)} + layanan ${money(tariffs.platformFee)}${pickupSurcharge ? ` + jemput ${pickupDistanceKm} km: ${money(pickupSurcharge)}` : nearestDriver ? ` · jemput ${pickupDistanceKm} km (tanpa biaya tambahan)` : " · biaya jemput dihitung saat driver tersedia"}. Tarif estimasi; harga akhir dikonfirmasi bersama driver.`;
       updateSubmitButton();
     } catch (error) {
       if (destroyed || request !== quoteRequest) return;
@@ -160,6 +188,14 @@ export async function render(container, { user }) {
       showToast("Estimasi tarif belum tersedia. Periksa titik jemput dan tujuan lalu coba lagi.", "error");
     }
   };
+  stopDriverLocations = user?.uid ? await OrderService.subscribeDriverLocations(locations => {
+    driverLocations = locations;
+    mapService.setDriverLocations(locations);
+    if (pickup && dropoff) {
+      window.clearTimeout(pickupRefreshTimer);
+      pickupRefreshTimer = window.setTimeout(refreshQuote, 500);
+    }
+  }, error => console.error("Lokasi driver tidak dapat dimuat.", error)) : () => {};
 
   const reverseGeocode = async (kind, point) => {
     lookupControllers[kind]?.abort();
@@ -354,11 +390,13 @@ export async function render(container, { user }) {
     }
   });
 
-  container.addEventListener("DOMNodeRemoved", () => {
+  registerRouteCleanup(() => {
     destroyed = true;
+    stopDriverLocations();
+    window.clearTimeout(pickupRefreshTimer);
     Object.values(searchTimers).forEach(timer => window.clearTimeout(timer));
     Object.values(searchControllers).forEach(controller => controller?.abort());
     Object.values(lookupControllers).forEach(controller => controller?.abort());
     mapService.destroy();
-  }, { once: true });
+  });
 }

@@ -101,7 +101,6 @@ export async function render(container, { user }) {
   for (const { order } of orderData) {
     const mapElement = container.querySelector(`#tracking-map-${CSS.escape(order.id)}`);
     let map = null;
-    let driverMarker = null;
     try {
       if (mapElement && validPoint(order.pickup) && validPoint(order.dropoff)) {
         map = new MapService(mapElement.id, [order.pickup.lat, order.pickup.lng], 13);
@@ -146,9 +145,15 @@ export async function render(container, { user }) {
         status.insertAdjacentHTML("afterend", `<span class="badge badge-success" data-merchant-status>Toko mulai menyiapkan pesanan</span>`);
       }
       if (validPoint(current.driverLocation) && map) {
-        if (!driverMarker) driverMarker = L.marker([current.driverLocation.lat, current.driverLocation.lng]).addTo(map.map).bindPopup("Kurir");
-        else driverMarker.setLatLng([current.driverLocation.lat, current.driverLocation.lng]);
-        map.map.panInside(driverMarker.getLatLng(), { padding: [48, 48], animate: false });
+        map.setDriverLocations([{
+          uid: current.driverId || order.id,
+          lat: current.driverLocation.lat,
+          lng: current.driverLocation.lng,
+          isOnline: true,
+          updatedAt: current.driverLocationUpdatedAt || current.updatedAt
+        }]);
+        const point = [current.driverLocation.lat, current.driverLocation.lng];
+        map.map.panInside(point, { padding: [48, 48], animate: false });
         const label = card.querySelector("[data-location-status]");
         if (label) label.textContent = `Lokasi kurir diperbarui ${current.driverLocationUpdatedAt ? new Date(current.driverLocationUpdatedAt).toLocaleTimeString("id-ID") : "langsung"}.`;
       }

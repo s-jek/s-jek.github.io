@@ -1,6 +1,7 @@
 import { initializeFirebase } from "../config/firebase-config.js";
 import { DEFAULT_TARIFFS } from "./pricingService.js";
 import { NotificationService } from "./notificationService.js";
+import { FinanceService } from "./financeService.js";
 
 const ORDER_KEY = "sjek.orders.v1";
 const TARIFF_KEY = "sjek.tariffs.v1";
@@ -149,6 +150,7 @@ export class OrderService {
       || !Number.isFinite(point?.lng) || Math.abs(point.lng) > 180) {
       throw new Error("Lokasi saat ini tidak valid.");
     }
+
     const now = new Date().toISOString();
     await firebase.firestoreSdk.updateDoc(
       firebase.firestoreSdk.doc(firebase.db, "orders", orderId),
@@ -157,6 +159,62 @@ export class OrderService {
         driverLocationUpdatedAt: now
       }
     );
+  }
+
+  static async updateDriverPresence(uid, point, isOnline) {
+    const firebase = await initializeFirebase();
+    if (!firebase || firebase.auth.currentUser?.uid !== uid) {
+      throw new Error("Sesi driver tidak tersedia.");
+    }
+    if (!Number.isFinite(point?.lat) || Math.abs(point.lat) > 90
+      || !Number.isFinite(point?.lng) || Math.abs(point.lng) > 180) {
+      throw new Error("Lokasi saat ini tidak valid.");
+    }
+    const { doc, setDoc } = firebase.firestoreSdk;
+    await setDoc(doc(firebase.db, "driverLocations", uid), {
+      lat: point.lat,
+      lng: point.lng,
+      isOnline: Boolean(isOnline),
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  }
+
+  static async setDriverOffline(uid) {
+    const firebase = await initializeFirebase();
+    if (!firebase || firebase.auth.currentUser?.uid !== uid) {
+      throw new Error("Sesi driver tidak tersedia.");
+    }
+    const { doc, getDoc, setDoc } = firebase.firestoreSdk;
+    const reference = doc(firebase.db, "driverLocations", uid);
+    const snapshot = await getDoc(reference);
+    if (!snapshot.exists()) return;
+    await setDoc(reference, { isOnline: false, updatedAt: new Date().toISOString() }, { merge: true });
+  }
+
+  static async subscribeDriverLocations(callback, onError = console.error) {
+    const firebase = await initializeFirebase();
+    if (!firebase) return () => {};
+    const { collection, onSnapshot } = firebase.firestoreSdk;
+    return onSnapshot(collection(firebase.db, "driverLocations"), snapshot => {
+      callback(snapshot.docs.map(item => ({ uid: item.id, ...item.data() })));
+    }, onError);
+  }
+
+  static async updatePartnerAccount(uid, updates) {
+    const firebase = await initializeFirebase();
+    if (!firebase || !firebase.auth.currentUser) throw new Error("Sesi admin tidak tersedia.");
+    const { doc, writeBatch } = firebase.firestoreSdk;
+    const batch = writeBatch(firebase.db);
+    batch.update(doc(firebase.db, "users", uid), {
+      ...updates,
+      updatedAt: new Date().toISOString()
+    });
+    if (updates.driverAccountStatus) {
+      batch.set(doc(firebase.db, "driverLocations", uid), {
+        accountStatus: updates.driverAccountStatus
+      }, { merge: true });
+    }
+    await batch.commit();
   }
 
   static async acceptMerchantOrder(orderId, merchantId) {
@@ -213,8 +271,17 @@ export class OrderService {
       const passengerPhone = String(input.passenger?.phone || "").trim();
       if (!passengerName || !passengerPhone) throw new Error("Nama dan nomor ponsel penumpang wajib diisi.");
       const pricing = input.pricingBreakdown || {};
+      const baseDeliveryFare = pricing.baseDeliveryFare ?? pricing.deliveryFare;
+      const driverCommissionPct = pricing.driverCommissionPct ?? DEFAULT_TARIFFS.driverCommissionPct;
+      const merchantCommissionPct = pricing.merchantCommissionPct ?? DEFAULT_TARIFFS.merchantCommissionPct;
       if (![pricing.distanceKm, pricing.deliveryFare, pricing.platformFee].every(Number.isFinite)
-        || pricing.distanceKm <= 0 || pricing.deliveryFare < 0 || pricing.platformFee < 0) {
+        || pricing.distanceKm <= 0 || pricing.deliveryFare < 0 || pricing.platformFee < 0
+        || !Number.isFinite(baseDeliveryFare) || baseDeliveryFare < 0
+        || !Number.isFinite(driverCommissionPct) || driverCommissionPct < 0 || driverCommissionPct > 100
+        || !Number.isFinite(merchantCommissionPct) || merchantCommissionPct < 0 || merchantCommissionPct > 100
+        || !Number.isFinite(pricing.pickupDistanceKm || 0) || !Number.isFinite(pricing.pickupSurcharge || 0)
+        || (pricing.pickupDistanceKm || 0) < 0 || (pricing.pickupSurcharge || 0) < 0
+        || pricing.deliveryFare !== baseDeliveryFare + (pricing.pickupSurcharge || 0)) {
         throw new Error("Estimasi perjalanan belum siap. Pilih titik jemput dan tujuan.");
       }
       const orderRef = firebase.firestoreSdk.doc(firebase.firestoreSdk.collection(firebase.db, "orders"));
@@ -232,8 +299,13 @@ export class OrderService {
         items: [],
         pricingBreakdown: {
           distanceKm: pricing.distanceKm,
+          baseDeliveryFare,
           deliveryFare: pricing.deliveryFare,
           platformFee: pricing.platformFee,
+          driverCommissionPct,
+          merchantCommissionPct,
+          pickupDistanceKm: pricing.pickupDistanceKm || 0,
+          pickupSurcharge: pricing.pickupSurcharge || 0,
           voucherDiscount: 0,
           totalCustomerPay: pricing.deliveryFare + pricing.platformFee,
           isEstimate: true
@@ -256,6 +328,19 @@ export class OrderService {
     if (!firebase || !firebase.auth.currentUser) throw new Error("Firebase belum siap atau sesi pengguna telah berakhir.");
     const { doc, runTransaction } = firebase.firestoreSdk;
     const uid = firebase.auth.currentUser.uid;
+    if (orderStatus === "ACCEPTED" && actor.driverId === uid) {
+      const { getDoc } = firebase.firestoreSdk;
+      const [profile, driverOrders, settlements, tariffs] = await Promise.all([
+        getDoc(doc(firebase.db, "users", uid)),
+        this.listOrders({ driverId: uid }),
+        FinanceService.listDriverSettlements(uid),
+        this.getTariffs()
+      ]);
+      if (profile.data()?.driverAccountStatus === "SUSPENDED"
+        || FinanceService.calculateDriverSettlementStatus(driverOrders, settlements, tariffs).blockedByFinance) {
+        throw new Error("Akun atau setoran driver belum memenuhi syarat untuk menerima order.");
+      }
+    }
     const orderRef = doc(firebase.db, "orders", orderId);
     let previousStatus = "";
     const order = await runTransaction(firebase.db, async transaction => {
@@ -309,7 +394,7 @@ export class OrderService {
     batch.set(reference, updated, { merge: true });
     this.recordBusinessRuleChange(firebase, batch, {
       title: "Perubahan aturan tarif dan pembagian komisi",
-      details: "Tarif Ojek/SFood/SSend, biaya layanan, atau komisi platform diperbarui.",
+      details: "Tarif layanan, biaya jemput, deposit mitra, biaya layanan, atau komisi platform diperbarui.",
       before: previous,
       after: updated
     });

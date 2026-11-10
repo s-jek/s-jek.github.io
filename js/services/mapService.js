@@ -26,6 +26,10 @@ export class MapService {
     this.dropoffMarker = null;
     this.routePolyline = null;
     this.locationHandler = null;
+    this.driverMarkers = new Map();
+    this.driverLocations = [];
+    this.driverLayer = L.layerGroup().addTo(this.map);
+    this.driverPresenceTimer = window.setInterval(() => this.refreshDriverMarkers(), 15000);
   }
 
   setLocationHandler(handler) {
@@ -70,6 +74,47 @@ export class MapService {
     this.routePolyline = null;
   }
 
+  setDriverLocations(locations) {
+    this.driverLocations = locations;
+    this.refreshDriverMarkers();
+  }
+
+  refreshDriverMarkers() {
+    const now = Date.now();
+    const seen = new Set();
+    for (const driver of this.driverLocations) {
+      if (!Number.isFinite(driver.lat) || !Number.isFinite(driver.lng)) continue;
+      const updatedAt = Date.parse(driver.updatedAt || "");
+      const age = now - updatedAt;
+      if (!Number.isFinite(updatedAt) || age < 0 || age > 24 * 60 * 60 * 1000) continue;
+      seen.add(driver.uid);
+      const active = driver.isOnline === true && age <= 60_000;
+      const status = driver.accountStatus === "SUSPENDED" ? "suspended" : active ? "active" : "offline";
+      const icon = L.divIcon({
+        className: `driver-map-marker driver-map-marker-${status}`,
+        html: '<span aria-hidden="true">🏍</span>',
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
+      });
+      let marker = this.driverMarkers.get(driver.uid);
+      if (!marker) {
+        marker = L.marker([driver.lat, driver.lng], { icon, title: status === "active" ? "Driver aktif" : status === "suspended" ? "Driver tidak aktif" : "Lokasi terakhir driver" });
+        marker.addTo(this.driverLayer);
+        this.driverMarkers.set(driver.uid, marker);
+      } else {
+        marker.setLatLng([driver.lat, driver.lng]);
+        marker.setIcon(icon);
+        marker.options.title = status === "active" ? "Driver aktif" : status === "suspended" ? "Driver tidak aktif" : "Lokasi terakhir driver";
+      }
+    }
+    for (const [uid, marker] of this.driverMarkers) {
+      if (!seen.has(uid)) {
+        this.driverLayer.removeLayer(marker);
+        this.driverMarkers.delete(uid);
+      }
+    }
+  }
+
   async calculateRealRoute(startLat, startLng, endLat, endLng, isCurrent = () => true) {
     const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
     this.clearRoute();
@@ -111,6 +156,8 @@ export class MapService {
   }
 
   destroy() {
+    window.clearInterval(this.driverPresenceTimer);
+    this.driverMarkers.clear();
     this.map.remove();
   }
 }

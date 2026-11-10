@@ -2,3 +2,24 @@
 .map-help { margin: 8px 0 12px; color: var(--sjek-text-muted); font-size: 13px; }
 .leaflet-container { font-family: var(--sjek-font); }
 @media (max-width: 600px) { .map-panel { height: 280px; } }
+.driver-map-marker {
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font-size: 19px;
+}
+
+.driver-map-marker-active {
+  background: #2fa79e;
+}
+
+.driver-map-marker-offline {
+  background: #858b91;
+}
+
+.driver-map-marker-suspended {
+  background: #d93025;
+}

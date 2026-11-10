@@ -21,6 +21,7 @@ export async function render(container, { user }) {
     <a class="card stack" href="#/admin/banners"><h2>Banner beranda</h2><p class="muted">Unggah dan atur promosi yang tampil di beranda konsumen.</p><span class="btn btn-secondary">Atur banner</span></a>
     <a class="card stack" href="#/admin/review-appeals"><h2>Banding penilaian</h2><p class="muted">Tinjau bukti dan putuskan banding untuk ulasan bintang satu atau dua.</p><span class="btn btn-secondary">Tinjau banding</span></a>
     <a class="card stack" href="#/admin/finance"><h2>Pembukuan platform</h2><p class="muted">GMV, hak mitra, subsidi dan komisi platform.</p><span class="btn btn-primary">Buka laporan</span></a>
+    <a class="card stack" href="#/admin/driver-settlements"><h2>Setoran &amp; deposit mitra</h2><p class="muted">Tinjau setor tunai driver, nonaktifkan akun, dan catat pengembalian deposit.</p><span class="btn btn-secondary">Kelola setoran</span></a>
     <article class="card stack"><h2>Model bisnis</h2><p>Komisi driver ${tariffs.driverCommissionPct}% · Komisi toko ${tariffs.merchantCommissionPct}% · Biaya layanan ${money(tariffs.platformFee)}.</p><p class="muted">Tarif Ojek merupakan estimasi tunai. Pemesanan SFood dan SSend belum tersedia.</p></article></section>
     <section class="stack" style="margin-top:24px"><div><span class="eyebrow">VERIFIKASI PARTNER</span><h2>Permohonan mitra (${applications.length})</h2><p class="muted">Periksa data dan dokumen asli secara langsung sebelum memberi keputusan.</p></div>
       ${applications.length ? applications.map(application => {

@@ -122,7 +122,8 @@ const routes = {
   "/admin/coins": () => import("./views/admin/coinManagementView.js"),
   "/admin/banners": () => import("./views/admin/bannerManagementView.js"),
   "/admin/review-appeals": () => import("./views/admin/reviewAppealsView.js"),
-  "/admin/finance": () => import("./views/admin/ownerFinanceView.js")
+  "/admin/finance": () => import("./views/admin/ownerFinanceView.js"),
+  "/admin/driver-settlements": () => import("./views/admin/driverSettlementView.js")
 };
 
 function updateHeader(user) {
@@ -134,8 +135,8 @@ function updateHeader(user) {
   portalLinks.innerHTML = user ? [
     `<a href="#/customer">Beranda</a>`,
     `<a href="#/customer/rewards">Koin</a>`,
-    ...(user.partnerRoles?.includes("driver") ? [`<a href="#/driver/orders">Kurir</a>`] : []),
-    ...(user.partnerRoles?.includes("merchant") ? [`<a href="#/merchant/orders">Food</a>`] : []),
+    ...(user.partnerRoles?.includes("driver") && user.driverAccountStatus !== "SUSPENDED" ? [`<a href="#/driver/orders">Kurir</a>`] : []),
+    ...(user.partnerRoles?.includes("merchant") && user.merchantAccountStatus !== "SUSPENDED" ? [`<a href="#/merchant/orders">Food</a>`] : []),
     ...(user.role === "admin" || user.role === "superadmin" ? [`<a href="#/admin">Admin</a>`] : [])
   ].join("") : "";
 }
@@ -144,7 +145,7 @@ function hasPortalAccess(path, user) {
   if (path === "/auth") return true;
   if (!user) return ["/", "/customer", "/customer/ojek", "/customer/sfood", "/customer/ssend"].includes(path);
   if (path.startsWith("/driver")) return user.partnerRoles?.includes("driver") === true;
-  if (path.startsWith("/merchant")) return user.partnerRoles?.includes("merchant") === true;
+  if (path.startsWith("/merchant")) return user.partnerRoles?.includes("merchant") === true && user.merchantAccountStatus !== "SUSPENDED";
   if (path.startsWith("/admin")) return ["admin", "superadmin"].includes(user.role);
   return true;
 }
