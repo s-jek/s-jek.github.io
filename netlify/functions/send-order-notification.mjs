@@ -210,6 +210,14 @@ export const handler = async event => {
           const batch = pendingTokens;
           const result = await getMessaging(app).sendEachForMulticast({
             tokens: batch,
+            android: {
+              priority: "high",
+              notification: {
+                title: notification.title,
+                body: notification.body,
+                color: "#00880C"
+              }
+            },
             data: {
               title: notification.title,
               body: notification.body,

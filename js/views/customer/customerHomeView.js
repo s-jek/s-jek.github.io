@@ -51,7 +51,8 @@ export async function render(container, { user }) {
     <section class="customer-hero">
       <div class="hero-copy"><span class="eyebrow">SJek · layanan harianmu</span><h1>${user ? `Hai, ${escapeHTML(user.name || "Teman")} 👋<br>Hari ini mau apa?` : "Satu aplikasi,<br>semua beres."}</h1>
       <p>Ojek online, makanan favorit, dan pengiriman barang bersama mitra sekitar.</p>
-      <div class="hero-actions"><a class="btn btn-primary" href="#/customer/ojek">🏍️ Pesan Ojek</a><a class="btn btn-hero-outline" href="#/customer/sfood">🍜 SFood</a><a class="btn btn-hero-outline" href="#/customer/ssend">📦 SSend</a></div></div>
+      <div class="hero-actions"><a class="btn btn-primary" href="#/customer/ojek">🏍️ Pesan Ojek</a><a class="btn btn-hero-outline" href="#/customer/sfood">🍜 SFood</a><a class="btn btn-hero-outline" href="#/customer/ssend">📦 SSend</a><a class="btn btn-hero-outline" href="/downloads/sjek-android-1.0-debug.apk" download>📲 Unduh APK Android (uji)</a></div>
+      <small class="apk-download-note">Build uji Android; bukan rilis Google Play.</small></div>
       <div class="hero-art" aria-hidden="true"><img class="hero-circle hero-logo" src="assets/img/sjek-mark.png" alt=""><span class="hero-spark spark-one">✦</span><span class="hero-spark spark-two">✦</span><span class="hero-orbit">Ojek<br>SFood · SSend</span></div>
     </section>
     ${banners.length ? `<section class="banner-carousel customer-section" aria-label="Promosi SJek"><div class="banner-stage"></div><div class="banner-dots" role="tablist" aria-label="Pilih banner">${banners.map((banner, index) => `<button class="banner-dot ${index === 0 ? "active" : ""}" type="button" data-banner="${index}" aria-label="Banner ${index + 1}" aria-selected="${index === 0}"></button>`).join("")}</div></section>` : ""}

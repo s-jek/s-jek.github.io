@@ -4,10 +4,20 @@
   "private": true,
   "description": "SJek On-Demand Multi-Portal Web App: SFood, SSend, Tariffs & 3-Party Financial Ledger",
   "scripts": {
-    "start": "npx serve -s . -l 3000"
+    "start": "npx serve -s . -l 3000",
+    "build:web": "vite build && node scripts/copy-web-assets.mjs",
+    "android:sync": "npm run build:web && cap sync android",
+    "android:build": "npm run android:sync && cd android && gradlew.bat assembleDebug --no-daemon --max-workers=1"
   },
   "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/push-notifications": "^7.0.3",
     "firebase-admin": "^14.5.0",
     "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "vite": "^6.4.1"
   }
 }

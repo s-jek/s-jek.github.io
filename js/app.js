@@ -239,12 +239,17 @@ signOutButton.addEventListener("click", async () => {
 });
 
 permissionsButton.addEventListener("click", showDevicePermissions);
+if (window.Capacitor?.isNativePlatform?.()) {
+  NotificationService.initializeNativePushListeners().catch(error => {
+    console.error("Listener notifikasi native gagal disiapkan.", error);
+  });
+}
 window.addEventListener("sjek:push-notification", event => {
   const { eventType, title, body, url, orderId } = event.detail || {};
   if (!NotificationService.shouldDisplayEvent(eventType, orderId)) return;
   showToast(`${title}${body ? ` — ${body}` : ""}`);
   NotificationService.playEventSound(eventType, orderId);
-  if ("Notification" in window && Notification.permission === "granted") {
+  if (!window.Capacitor?.isNativePlatform?.() && "Notification" in window && Notification.permission === "granted") {
     const notification = new Notification(title || "SJek", { body: body || "", icon: "./assets/img/sjek-mark.png" });
     notification.onclick = () => {
       window.focus();
@@ -266,6 +271,11 @@ window.addEventListener("sjek:data-changed", () => {
 initializeFirebase().then(async () => {
   const user = await AuthService.hydrateSession();
   updateHeader(user);
+  if (user) {
+    NotificationService.restoreNativePush(user.uid).catch(error => {
+      console.error("Pendaftaran ulang notifikasi native gagal.", error);
+    });
+  }
   await watchPartnerRuleNotices(user);
   await renderRoute();
 }).catch(error => {

@@ -1,6 +1,13 @@
 node_modules/
 .netlify/
 .firebase/
+/www/
+/android/app/google-services.json
+/android/local.properties
+/android/.gradle/
+/android/**/build/
+*.jks
+*.keystore
 .env
 .env.*
 !.env.example

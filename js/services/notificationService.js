@@ -1,9 +1,13 @@
 import { firebaseConfig, initializeFirebase } from "../config/firebase-config.js";
 
 const DEVICE_KEY = "sjek.pushDeviceId.v1";
+const NATIVE_PUSH_ENABLED_KEY = "sjek.nativePushEnabled.v1";
 const activeMessaging = new WeakSet();
 const playedSounds = new Map();
 const displayedEvents = new Map();
+let nativePushListenersPromise = null;
+let nativeTokenWaiter = null;
+let nativePushUid = "";
 const NOTIFICATION_LABELS = {
   "order-created": ["Pesanan kurir baru", "Ada pesanan baru di sekitar Anda."],
   "order-accepted": ["Pesanan diterima", "Kurir telah menerima pesanan Anda."],
@@ -20,15 +24,39 @@ function getDeviceId() {
   return id;
 }
 
+async function savePushToken(firebase, uid, token) {
+  await firebase.firestoreSdk.setDoc(
+    firebase.firestoreSdk.doc(firebase.db, "users", uid, "pushTokens", getDeviceId()),
+    { token, updatedAt: new Date().toISOString() }
+  );
+}
+
+function resolveNativeTokenWaiter(error) {
+  if (!nativeTokenWaiter) return;
+  const waiter = nativeTokenWaiter;
+  nativeTokenWaiter = null;
+  window.clearTimeout(waiter.timeout);
+  if (error) waiter.reject(error);
+  else waiter.resolve();
+}
+
+function showNativePushError(error) {
+  console.error("Pendaftaran FCM Android gagal.", error);
+  resolveNativeTokenWaiter(error instanceof Error ? error : new Error("Perangkat belum dapat didaftarkan untuk notifikasi."));
+}
+
 export class NotificationService {
   static async enablePush() {
+    const firebase = await initializeFirebase();
+    const currentUser = firebase?.auth.currentUser;
+    if (!firebase || !currentUser) throw new Error("Masuk untuk mengaktifkan notifikasi.");
+    if (window.Capacitor?.isNativePlatform?.()) {
+      return this.enableNativePush(currentUser.uid);
+    }
     if (!("Notification" in window) || !("serviceWorker" in navigator)) {
       throw new Error("Browser ini belum mendukung notifikasi push.");
     }
     if (!firebaseConfig.vapidPublicKey) throw new Error("VAPID key belum dipasang di konfigurasi aplikasi.");
-    const firebase = await initializeFirebase();
-    const currentUser = firebase?.auth.currentUser;
-    if (!firebase || !currentUser) throw new Error("Masuk untuk mengaktifkan notifikasi.");
     const permission = Notification.permission === "default"
       ? await Notification.requestPermission()
       : Notification.permission;
@@ -58,17 +86,91 @@ export class NotificationService {
         }));
       });
     }
-    await firebase.firestoreSdk.setDoc(
-      firebase.firestoreSdk.doc(firebase.db, "users", currentUser.uid, "pushTokens", getDeviceId()),
-      { token, updatedAt: new Date().toISOString() }
-    );
+    await savePushToken(firebase, currentUser.uid, token);
     return messaging;
+  }
+
+  static async enableNativePush(uid) {
+    nativePushUid = uid;
+    const PushNotifications = await this.initializeNativePushListeners();
+    const current = await PushNotifications.checkPermissions();
+    const permission = current.receive === "granted"
+      ? current
+      : await PushNotifications.requestPermissions();
+    if (permission.receive !== "granted") throw new Error("Izin notifikasi Android belum diberikan.");
+
+    const registered = new Promise((resolve, reject) => {
+      nativeTokenWaiter = { resolve, reject, timeout: window.setTimeout(() => {
+        resolveNativeTokenWaiter(new Error("Pendaftaran FCM terlalu lama. Periksa koneksi dan layanan Google Play."));
+      }, 20000) };
+    });
+    try {
+      await PushNotifications.register();
+      await registered;
+      localStorage.setItem(NATIVE_PUSH_ENABLED_KEY, "true");
+    } catch (error) {
+      resolveNativeTokenWaiter(error);
+      throw error;
+    }
+    return PushNotifications;
+  }
+
+  static async initializeNativePushListeners() {
+    if (!window.Capacitor?.isNativePlatform?.()) {
+      throw new Error("Notifikasi native hanya tersedia di aplikasi SJek Android.");
+    }
+    const { PushNotifications } = await import("@capacitor/push-notifications");
+    if (!nativePushListenersPromise) {
+      nativePushListenersPromise = Promise.all([
+        PushNotifications.addListener("registration", async token => {
+          try {
+            const firebase = await initializeFirebase();
+            const user = firebase?.auth.currentUser;
+            if (!firebase || user?.uid !== nativePushUid) throw new Error("Masuk kembali untuk mendaftarkan perangkat.");
+            await savePushToken(firebase, user.uid, token.value);
+            resolveNativeTokenWaiter();
+          } catch (error) {
+            showNativePushError(error);
+          }
+        }),
+        PushNotifications.addListener("registrationError", showNativePushError),
+        PushNotifications.addListener("pushNotificationReceived", notification => {
+          const data = notification.data || {};
+          const [defaultTitle, defaultBody] = this.labelFor(data.eventType) || ["Pembaruan SJek", "Ada pembaruan pesanan."];
+          window.dispatchEvent(new CustomEvent("sjek:push-notification", {
+            detail: {
+              eventType: data.eventType,
+              title: data.title || notification.title || defaultTitle,
+              body: data.body || notification.body || defaultBody,
+              url: data.url || "#/",
+              orderId: data.orderId || ""
+            }
+          }));
+        }),
+        PushNotifications.addListener("pushNotificationActionPerformed", action => {
+          const target = action.notification.data?.url;
+          if (typeof target === "string" && target) {
+            window.location.hash = target.startsWith("#")
+              ? target
+              : `#${target.startsWith("/") ? target : `/${target}`}`;
+          }
+        })
+      ]);
+    }
+    await nativePushListenersPromise;
+    return PushNotifications;
+  }
+
+  static async restoreNativePush(uid) {
+    if (!window.Capacitor?.isNativePlatform?.() || localStorage.getItem(NATIVE_PUSH_ENABLED_KEY) !== "true") return;
+    await this.enableNativePush(uid);
   }
 
   static async removePushToken() {
     const firebase = await initializeFirebase();
     const user = firebase?.auth.currentUser;
     if (!firebase || !user) return;
+    localStorage.removeItem(NATIVE_PUSH_ENABLED_KEY);
     await firebase.firestoreSdk.deleteDoc(
       firebase.firestoreSdk.doc(firebase.db, "users", user.uid, "pushTokens", getDeviceId())
     );
