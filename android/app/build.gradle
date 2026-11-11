@@ -16,10 +16,34 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            storeFile file(System.getenv("SJEK_RELEASE_KEYSTORE") ?: "${System.properties['user.home']}/sjek-release.jks")
+            storePassword System.getenv("SJEK_RELEASE_STORE_PASSWORD") ?: ""
+            keyAlias System.getenv("SJEK_RELEASE_KEY_ALIAS") ?: "sjek"
+            keyPassword System.getenv("SJEK_RELEASE_KEY_PASSWORD") ?: ""
+        }
+    }
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == "assembleRelease" || task.name == "bundleRelease") {
+        task.doFirst {
+            def keystorePath = System.getenv("SJEK_RELEASE_KEYSTORE") ?: "${System.properties['user.home']}/sjek-release.jks"
+            def missing = []
+            if (!file(keystorePath).isFile()) missing << "SJEK_RELEASE_KEYSTORE"
+            if (!System.getenv("SJEK_RELEASE_STORE_PASSWORD")) missing << "SJEK_RELEASE_STORE_PASSWORD"
+            if (!System.getenv("SJEK_RELEASE_KEY_PASSWORD")) missing << "SJEK_RELEASE_KEY_PASSWORD"
+            if (!missing.isEmpty()) {
+                throw new GradleException("Release signing is not configured. Set: ${missing.join(', ')}")
+            }
         }
     }
 }
